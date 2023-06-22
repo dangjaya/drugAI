@@ -27,12 +27,18 @@ def train_model(model, opt):
                     
         for i, batch in enumerate(opt.train): 
             print (f" batch {i}")
-            src = batch.src.transpose(0,1)
-            trg = batch.src.transpose(0,1)
-            t   = batch.t
+            src           = batch.src.transpose(0,1)
+            trg           = batch.trg.transpose(0,1)
+            protTarget    = batch.target.transpose(0,1)
+            t             = batch.t
             trg_input           = trg[:, :-1]
             src_mask, trg_mask  = create_masks(src, trg_input, opt)
-            preds               = model(src, trg_input, src_mask, trg_mask, t)
+            preds               = model(src,
+                                        trg_input,
+                                        src_mask,
+                                        trg_mask,
+                                        t,
+                                        protTarget)
             ys                  = trg[:, 1:].contiguous().view(-1)
             opt.optimizer.zero_grad()
             loss = F.cross_entropy(preds.view(-1, preds.size(-1)), ys, ignore_index=opt.trg_pad)
@@ -57,18 +63,17 @@ def train_model(model, opt):
             if opt.checkpoint > 0 and ((time.time()-cptime)//60) // opt.checkpoint >= 1:
                 torch.save(model.state_dict(), 'weights/model_weights')
                 cptime = time.time()
-   
-   
         print("%dm: epoch %d [%s%s]  %d%%  loss = %.3f\nepoch %d complete, loss = %.03f" %\
         ((time.time() - start)//60, epoch + 1, "".join('#'*(100//5)), "".join(' '*(20-(100//5))), 100, avg_loss, epoch + 1, avg_loss))
 
-def main():
 
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-training', required=True)
     parser.add_argument('-src_col', required=True)
     parser.add_argument('-trg_col', required=False)
     parser.add_argument('-timestep_col', required=False)
+    parser.add_argument('-protein_col', required=False)
     parser.add_argument('-no_cuda', action='store_true')
     parser.add_argument('-SGDR', action='store_true')
     parser.add_argument('-epochs', type=int, default=2)
@@ -84,17 +89,17 @@ def main():
     parser.add_argument('-max_strlen', type=int, default=80)
     parser.add_argument('-floyd', action='store_true')
     parser.add_argument('-checkpoint', type=int, default=0)
-
     opt = parser.parse_args()
-    
     opt.device = 0 if opt.no_cuda is False else -1
     # if opt.device == 0:
     #     assert torch.cuda.is_available()
     
     read_data(opt)
-    TSTEP, SRC, TRG    = create_fields(opt)
-    opt.train   = create_dataset(opt, TSTEP, SRC, TRG)
-    model       = get_model(opt, len(SRC.vocab), len(TRG.vocab))
+    TSTEP, PROT, SRC, TRG       = create_fields(opt)
+    opt.train                   = create_dataset(opt, TSTEP, PROT, SRC, TRG)
+    model                       = get_model(opt,len(SRC.vocab),
+                                                len(TRG.vocab),
+                                                PROT.vocab)
 
     opt.optimizer = torch.optim.Adam(model.parameters(), lr=opt.lr, betas=(0.9, 0.98), eps=1e-9)
     if opt.SGDR == True:
@@ -107,11 +112,10 @@ def main():
         os.mkdir('weights')
         pickle.dump(SRC, open('weights_SMILES/SRC.pkl', 'wb'))
         pickle.dump(TRG, open('weights_SMILES/TRG.pkl', 'wb'))
-    
     train_model(model, opt)
-
     if opt.floyd is False:
         promptNextAction(model, opt, SRC, TRG)
+
 
 def yesno(response):
     while True:
@@ -121,14 +125,11 @@ def yesno(response):
             return response
 
 def promptNextAction(model, opt, SRC, TRG):
-
     saved_once = 1 if opt.load_weights is not None or opt.checkpoint > 0 else 0
-    
     if opt.load_weights is not None:
         dst = opt.load_weights
     if opt.checkpoint > 0:
         dst = 'weights'
-
     while True:
         save = yesno(input('training complete, save results? [y/n] : '))
         if save == 'y':
@@ -148,7 +149,6 @@ def promptNextAction(model, opt, SRC, TRG):
                         if res == 'n':
                             continue
                     break
-            
             print("saving weights to " + dst + "/...")
             torch.save(model.state_dict(), f'{dst}/model_weights')
             if saved_once == 0:
@@ -177,6 +177,7 @@ def promptNextAction(model, opt, SRC, TRG):
         else:
             print("exiting program...")
             break
+
 
     # for asking about further training use while true loop, and return
 if __name__ == "__main__":
