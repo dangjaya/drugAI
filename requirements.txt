@@ -1,0 +1,8 @@
+torch
+torchtext==0.6.0
+dill
+pandas
+tqdm
+guacamol
+SmilesPE
+notebook
